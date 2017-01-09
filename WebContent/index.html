@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Migration2</title>
+<link href="css/style.css" rel="stylesheet" type="text/css">
+</head>
+<body>
+<div id="page_container">
+	<input type="file" name="filename" id="filename">
+	<br />
+	<label for="tblName">Table Name:</label>
+	<input type=text id="tblName" name="tblName" />
+	<br />
+	<label for="duser">Default User</label>
+	<input type="text" id="duser" name="duser" value="smasomhe" />
+	<br />
+	<label for="program">Program:</label>
+	<select id="program" name="program"></select>
+	<br />
+	<button id="btnAnalyze">Analyze</button>
+	<button id="btnProcess">Process</button>
+	<br />	
+	<textarea id="results" cols="100" rows="15"></textarea>
+</div>
+	
+<!-- End of body -->
+<!-- Script Files-->
+<script src="js/jquery.min.js"></script>
+<script src="js/jquery.csv.min.js"></script>
+<script>
+$(document).ready(function() {
+	var data = null;
+	var columns = null;
+	var csvData = null;
+	var userExist = false;
+	var programMatch = false;
+	var inputErrors = true;
+	
+	// track for errors
+	var textarea = $('#results');
+	textarea.scrollTop = textarea.scrollHeight;
+	loadPrograms();
+	
+	//$("#btnProcess").attr("disabled", true);
+	//$("#btnProcess").prop("disabled", true);
+	
+	$("#btnAnalyze").click(function(){
+		hasErrors();
+	});
+		
+	
+	$("#btnProcess").click( function(){
+		$("#btnProcess").attr("disabled", true);
+		if(!hasErrors())
+			processMigration(columns,data);
+		else
+			$("#btnProcess").attr("disabled", false);	
+		
+	});
+	
+	
+	
+	$("#filename").change(function(evt) {
+		var ext = $("input#filename").val().split(".").pop().toLowerCase();
+		
+		if($.inArray(ext, ["csv"]) == -1) {
+			$("#results").text('Invalid file, please upload CSV');
+			return false;
+		}
+		
+		if(!(window.File && window.FileReader && window.FileList && window.Blob)) {
+			$("#results").text('The File APIs are not fully supported in this browser!');
+			return false;
+	    }
+		
+		
+        var file = evt.target.files[0];
+        var reader = new FileReader();
+        reader.readAsText(file);
+        reader.onload = function(event) {
+        	csvData = event.target.result;
+            data = $.csv.toArrays(csvData);
+            columns = data[0];
+            
+            if (data && data.length > 0) {
+            	//alert('Imported -' + data.length + '- rows successfully!');
+            	//$("#results").html( headers.length );
+            	var rows = parseInt(data.length);
+            	rows = rows -1;
+            	$("#results").append( "&#13;&#10;CSV File read with "+ rows +" rows");
+            	//$("#results").append( JSON.stringify(columns) + " &#13;&#10; " + data );
+            	
+            } else {
+                alert('No data to import!');
+            }
+            
+        };
+        reader.onerror = function() {
+        	$("#results").text('Unable to read ' + file.fileName);
+        };
+        inputErrors = false;	// Flag no in put errors
+	});
+	
+	function hasErrors(){
+		$("#results").text("");	//reset feedback area;
+		
+		if( $("#filename").val().length < 1){
+			$("#results").text("No input file specified " );
+			return true;
+		};
+		
+		if( $("#tblName").val().length < 1 ){
+			$("#results").text("Table name not specified " );
+			return true;
+		}
+		
+		if( $("#duser").val().length < 1 ){
+			$("#results").text("Database user cannot be black " );
+			return true;
+		}
+		var str = $('#tblName').val();
+		if(/^[a-zA-Z0-9-_ ]*$/.test(str) == false) {
+			$("#results").text("Invalid table name. Table name cannot have special characters " );
+			return true;
+		}
+		
+		if( $("#tblName").val().indexOf(' ') >= 0 ){
+			$("#results").text("Invalid table name. Table name cannot have spaces " );
+			return true;
+		}
+		if( $("#program").val() < 1 ){
+			$("#results").text("No program selected. Please select one!" );
+			return true;
+		}
+		
+		if( importantColumnsNotExists() ){
+			return true;
+		}
+		if( duplicateProgramStage() ){
+			return true;
+		}
+		if(inputErrors){
+			$("#results").append("&#13;&#10;Fix input errors");
+			return true;
+		}
+		chkUser();
+		if(!userExist){
+			$("#results").append("&#13;&#10;Username does not exist in the system, please change it");
+			return true;
+		}
+		verifyProgramID();
+		if(!programMatch){
+			$("#results").append("&#13;&#10;Program selected does not match the datafile, please fix it!");
+			return true;
+		}
+		return false;
+	}
+	
+	function duplicateProgramStage(){
+		$("#results").append("&#13;&#10;Verifying consistances in program stages,...");
+		var idxOfps = $.inArray("ps",columns);
+		for(var i=1;i<data.length-1;i++){
+			if(data[i][idxOfps]!=data[i+1][idxOfps]){
+				$("#results").append("&#13;&#10;Error: More than one program stage identified. Please check your input file");
+				return true;
+			}
+		}
+		$("#results").append("&#13;&#10;Consistence verified.");
+		return false;
+	}
+	function importantColumnsNotExists(){
+		var impColumns = ["psi","pi","ps","executiondate","ou","tei"];
+		$.each(impColumns, function(index,value){
+			if( $.inArray(value,columns) == -1 ){
+				$("#results").append("&#13;&#10;Column " + value + "does not exist. Invalid input file" );
+				return true;
+			}
+		});
+		return false;
+	}
+	function createAnalyticsTable(columns,data){
+		$("#results").append("&#13;&#10;Creating analytics table...");
+		$.ajax({
+			  type: "POST",
+			  url: "CreateAnalyticsTable",
+			  data: {
+				  tablename: $("#tblName").val(),
+				  columns:JSON.stringify(columns),
+				  data: JSON.stringify(data)
+			  },
+			  dataType: "json",
+			  success: function(data){
+				$("#results").append("&#13;&#10;" + data.message );
+			  },
+			  error: function(data){
+				  $("#results").append("&#13;&#10;" + data.message );  
+			  }
+			  
+		});
+	}
+	function processMigration(columns,data){
+		$("#results").append("&#13;&#10;Process migration started");
+		$.ajax({
+			type: "POST",
+		  	url: "ProcessMigration",
+		  	data: {
+				  tablename: $("#tblName").val(),
+				  columns:JSON.stringify(columns),
+				  data: JSON.stringify(data),
+				  program: $("#program").val(),
+				  duser: $("duser").val()
+			},
+		  	dataType: "json",
+		  	async: true,
+		  	success: function(data){
+				$("#results").append("&#13;&#10;Data migrated" + data.message);
+		  	},
+		  	error: function(xhr, status, error){
+			  	$("#results").append("&#13;&#10;Migration Error, Duplicate Key or data already exist &#13;&#10;" + xhr.responseText + error );    
+		  	}
+		})
+	}
+	function loadPrograms(){
+		$.ajax({
+			type: "POST",
+			url: "Controls",
+			data: { rtype:"programs"},
+			datatype: "json",
+			success: function(data){
+				if(data.success){
+					html = "<option value=0>Please select a program</option>"
+					$.each(data.program, function(key,val){
+						html += "<option value="+val.id+">"+val.name+"</option>";
+					})
+					$("#results").append( data.message ); 
+				}
+				$("#program").append(html);
+			},
+			error: function(xhr, status, error){
+				$("#results").append("&#13;&#10;Load programs with an ajax call returned an error" + xhr.responseText); 
+			}
+		})
+	}
+	function verifyProgramID(){
+	    var idxOfps = $.inArray("ps",columns);
+	    var ps_uid  = data[1][idxOfps];
+	    $.ajax({
+	    	type: "POST",
+	    	url: "ProgramStage",
+	    	data: {
+	    		rtype:"ps",
+	    		ps_uid:ps_uid
+	    	},
+	    	datatype: "json",
+	    	async: false,
+	    	beforeSend: function(){
+	    		$("#results").append("&#13;&#10;Verifying program stage from the data file exist with the selected program,...");
+	    	},
+	    	success: function(data){
+	    		if(data.success){
+	    			if( data.progid != $("#program").val()  ){
+		    			$("#results").append("Error: Your datafile does not match the program you have selected");
+		    			programMatch = false;
+		    		}else{
+		    			$("#results").append("Program stage verified");
+		    			programMatch = true;
+		    		}
+	    		}else{
+	    			$("#results").append("&#13;&#10;"+data.message);
+	    			programMatch = false;
+	    		}
+	    		
+	    	},
+	    	error: function(xhr, status, error){
+	    		$("#results").append("&#13;&#10;Error on verifyProgram function, "+xhr.responseText);
+	    		programMatch = false;
+	    	}
+	    });
+	}
+	function chkUser(){
+		
+		$.ajax({
+			type:"POST",
+			url:"Controls",
+			async: false,
+			data: { rtype:"chkuser",
+					usr:$("#duser").val() },
+			datatype:"json",
+			beforeSend: function(){
+				$("#results").append("&#13;&#10;Verifying username exist,...");		
+			},
+			success: function(data){
+				if(data.success){
+					$("#results").append("Username verified");
+					userExist = true;
+				}else{
+					$("#results").text("User does not exist. Please put a valid username" );
+					userExist = false;
+				}
+			},
+			error: function(xhr, status, error){
+				$("#results").append("Error check user function"+xhr.responseText );
+				userExist = false;
+			}
+		});
+	}
+})
+</script>
+</body>
+</html>
