@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Migration - New Tracked Entity</title>
+<link href="css/style.css" rel="stylesheet" type="text/css">
+</head>
+<body>
+<div id="page_container">
+	<label> * Make sure the csv file contains the column ou for organisation unit UiD</label>
+	<br />
+	<label> * Make sure psi is the column that separates data attributes, data values to org unit details. (psi, ou, tei ...)</label>
+	<br /><br />
+	<input type="file" name="filename" id="filename">
+	<br />
+	<label for="tblName">Table Name:</label>
+	<input type=text id="tblName" name="tblName" />
+	<br />
+	<label for="duser">Default User</label>
+	<input type="text" id="duser" name="duser" value="smasomhe" />
+	<br />
+	<label for="program">Program:</label>
+	<select id="program" name="program"></select>
+	<br />
+	<button id="btnAnalyze">Analyze</button>
+	<button id="btnProcess">Process</button>
+	<a id="ldownload" href="#">Download</a>
+	<br /><br />	
+	<textarea id="results" cols="100" rows="15"></textarea>
+</div>
+	
+<!-- End of body -->
+<!-- Script Files-->
+<script src="js/jquery.min.js"></script>
+<script src="js/jquery.csv.min.js"></script>
+<script>
+$(document).ready(function() {
+	var data = null;
+	var columns = null;
+	var csvData = null;
+	var userExist = false;
+	var programMatch = false;
+	var inputErrors = true;
+	
+	loadPrograms();
+	
+	
+	$("#btnProcess").click( function(){
+		insertTEI();
+		insertPSI();
+		insertPI();
+		//downloadCSV();
+		createAnalyticsTable();
+		processNewRecord(data);
+	})
+	
+	$("#filename").change(function(evt) {
+		var ext = $("input#filename").val().split(".").pop().toLowerCase();
+		
+		if($.inArray(ext, ["csv"]) == -1) {
+			$("#results").text('Invalid file, please upload CSV');
+			return false;
+		}
+		
+		if(!(window.File && window.FileReader && window.FileList && window.Blob)) {
+			$("#results").text('The File APIs are not fully supported in this browser!');
+			return false;
+	    }
+		
+		
+        var file = evt.target.files[0];
+        var reader = new FileReader();
+        reader.readAsText(file);
+        reader.onload = function(event) {
+        	csvData = event.target.result;
+            data = $.csv.toArrays(csvData);
+            columns = data[0];
+            
+            if (data && data.length > 0) {
+            	//alert('Imported -' + data.length + '- rows successfully!');
+            	//$("#results").html( headers.length );
+            	var rows = parseInt(data.length);
+            	rows = rows -1;
+            	$("#results").append( "&#13;&#10;CSV File read with "+ rows +" rows");
+            	//$("#results").append( JSON.stringify(column1) + " &#13;&#10; ");
+            	
+            	//$("#results").append( "and " + data[2][8] );
+            	
+            } else {
+                alert('No data to import!');
+            }
+            
+        };
+        reader.onerror = function() {
+        	$("#results").text('Unable to read ' + file.fileName);
+        };
+        inputErrors = false;	// Flag no in put errors
+	});
+	
+	
+	function importantColumnsNotExists(){
+		var impColumns = ["psi","pi","ps","executiondate","ou","tei"];
+		$.each(impColumns, function(index,value){
+			if( $.inArray(value,columns) == -1 ){
+				$("#results").append("&#13;&#10;Column " + value + "does not exist. Invalid input file" );
+				return true;
+			}
+		});
+		return false;
+	}
+	function createAnalyticsTable(){
+		$.ajax({
+			type: "POST",
+			url: "CreateAnalyticsTable",
+			data: {
+				  tablename: $("#tblName").val(),
+				  columns:JSON.stringify(columns)
+			},
+			datatype: "json",
+			async: true,
+			success: function(data){
+				if(data.success){
+					$("#results").append("&#13;&#10;" + data.message);
+				}
+			},
+			error: function(xhr, status, error){
+			  	$("#results").append("&#13;&#10; Error! &#13;&#10;" + xhr.responseText + error );    
+		  	}
+		})
+	}
+	function loadPrograms(){
+		$.ajax({
+			type: "POST",
+			url: "Controls",
+			data: { rtype:"programs"},
+			datatype: "json",
+			success: function(data){
+				if(data.success){
+					html = "<option value=0>Please select a program</option>"
+					$.each(data.program, function(key,val){
+						html += "<option value="+val.id+">"+val.name+"</option>";
+					})
+					$("#results").append( data.message ); 
+				}
+				$("#program").append(html);
+			},
+			error: function(xhr, status, error){
+				$("#results").append("&#13;&#10;Load programs with an ajax call returned an error" + xhr.responseText); 
+			}
+		})
+	}
+	function processNewRecord(in_data){
+		$.ajax({
+			type: "POST",
+		  	url: "ProcessNewRec",
+		  	data: {
+				  tablename: $("#tblName").val(),
+				  rows: JSON.stringify(in_data),
+				  program: $("#program").val(),
+				  duser: $("duser").val()
+			},
+		  	dataType: "json",
+		  	async: true,
+		  	success: function(data){
+				$("#results").append("&#13;&#10;Data migrated" + data.message);
+		  	},
+		  	error: function(xhr, status, error){
+			  	$("#results").append("&#13;&#10;Migration Error, Duplicate Key or data already exist &#13;&#10;" + xhr.responseText + error );    
+		  	}
+		})
+	}
+	function processNewRecInBatches(){
+		$("#results").append("&#13;&#10; Process in batches");
+		var row = 3;
+		var batch = [];
+		var batchsize = 1000;
+		while (row<data.length){
+			batch.push( data[row] );
+			if( row++ % batchsize == 0){
+				processNewRecord( batch );
+				batch = [];
+			}
+		}
+		if(batch.length > 0)
+			processNewRecord( batch );
+	}
+	
+	function postTrackedEntityInstance(){
+		var tei = {};
+		var itm = {};
+		var att = [];
+		
+		// attributes as defined by EIMC 
+		var attr = ["XgYnDsaCEk4","ulJFYYN5FIK","ioEQ7Eumb2Y","Hnv0pPYuXVx","cYxGMLtawEq","Qu551QID2aN","sfioftgmC45","u2UNic88zD4","LFrM6uvEmmB","lt5a7cgkZQ3","ysfNQ5SPZC4","b1tudMvkB4S"];
+		
+		// insert tracked entity of the type person
+		tei["trackedEntity"] = "EUIG2cdV3cn"; 
+		
+		for(i=3; i<4;i++){
+			tei["orgUnit"] = data[i][ $.inArray("ward",columns) ];
+			$.each(attr, function(idx,val){
+				itm = {};
+				itm["attribute"] = val;  itm["value"] = data[i][$.inArray(val,columns)];
+				att.push(itm);
+			})
+			
+			tei["attributes"] = att;
+		}
+		alert( JSON.stringify(tei) );
+	}
+	function verifyProgramID(){
+	    var idxOfps = $.inArray("ps",columns);
+	    var ps_uid  = data[1][idxOfps];
+	    $.ajax({
+	    	type: "POST",
+	    	url: "ProgramStage",
+	    	data: {
+	    		rtype:"ps",
+	    		ps_uid:ps_uid
+	    	},
+	    	datatype: "json",
+	    	async: false,
+	    	beforeSend: function(){
+	    		$("#results").append("&#13;&#10;Verifying program stage from the data file exist with the selected program,...");
+	    	},
+	    	success: function(data){
+	    		if(data.success){
+	    			if( data.progid != $("#program").val()  ){
+		    			$("#results").append("Error: Your datafile does not match the program you have selected");
+		    			programMatch = false;
+		    		}else{
+		    			$("#results").append("Program stage verified");
+		    			programMatch = true;
+		    		}
+	    		}else{
+	    			$("#results").append("&#13;&#10;"+data.message);
+	    			programMatch = false;
+	    		}
+	    		
+	    	},
+	    	error: function(xhr, status, error){
+	    		$("#results").append("&#13;&#10;Error on verifyProgram function, "+xhr.responseText);
+	    		programMatch = false;
+	    	}
+	    });
+	}
+	function insertTEI(){
+		$("#results").append("&#13;&#10;Create new tracked entity instance uid");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("tei"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+		
+		//alert(data[1][ $.inArray("tei",columns) ]);
+	}
+	function insertPSI(){
+		$("#results").append("&#13;&#10;Create new program stage instance uid");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("psi"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+	}
+	function insertPI(){
+		$("#results").append("&#13;&#10;Create new program instance uid");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("pi"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+	}
+	function stringGen(len){
+		var text = "";
+		var charset = "abcdefghABCDEFGHIijklmnopqrstuvwxyzJKLMNOPQR12345STUVWXYZ6789";
+		for( var i=0; i < len; i++ )
+	        text += charset.charAt(Math.floor(Math.random() * charset.length));
+		 return text;
+	}
+	function downloadCSV(){
+		var csvContent = "data:text/csv;charset=utf-8,";
+		
+		$.each(data, function(i, v){
+			dataString = v.join(",");
+			csvContent += i < data.length ? dataString+ "\n" : dataString;
+		})
+		var encodedUri = encodeURI(csvContent);
+		//var link = document.createElement("a");
+		var link = document.getElementById('ldownload');
+		link.setAttribute("href", encodedUri);
+		link.setAttribute("download", "my_data.csv");
+		//document.body.appendChild(link); // Required for FF
+		
+		//link.click(); // This will download the data file named "my_data.csv"
+	}
+	function chkUser(){
+		
+		$.ajax({
+			type:"POST",
+			url:"Controls",
+			async: false,
+			data: { rtype:"chkuser",
+					usr:$("#duser").val() },
+			datatype:"json",
+			beforeSend: function(){
+				$("#results").append("&#13;&#10;Verifying username exist,...");		
+			},
+			success: function(data){
+				if(data.success){
+					$("#results").append("Username verified");
+					userExist = true;
+				}else{
+					$("#results").text("User does not exist. Please put a valid username" );
+					userExist = false;
+				}
+			},
+			error: function(xhr, status, error){
+				$("#results").append("Error check user function"+xhr.responseText );
+				userExist = false;
+			}
+		});
+	}
+})
+</script>
+</body>
+</html>
