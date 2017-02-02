@@ -13,3 +13,4 @@ hs_err_pid*
 
 # database connection file
 *.properties
+/build/

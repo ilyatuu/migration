@@ -25,19 +25,24 @@ import java.text.SimpleDateFormat;
 @WebServlet(description = "Creates analytics table", urlPatterns = { "/CreateAnalyticsTable" })
 public class CreateAnalyticsTable extends HttpServlet {
 	private static final long serialVersionUID = 1L;
-	
 	private DbConnect db;
 	private Connection cnn = null;
 	private PreparedStatement pstm = null;
 	
-	JSONObject jReturn;
-	PrintWriter pw;
-	
-	SimpleDateFormat formatter = new SimpleDateFormat("mm/dd/yy",Locale.US);
+	String query = "";
+	String duser = "";
+	String tablename = "";
 	
 	Date dateParsed;
 	java.sql.Date dateSql;
 	String dateString = "";
+	
+	int programid;
+	JSONObject jReturn;
+	JSONArray columns;
+	JSONArray jdata;
+	PrintWriter pw;
+	SimpleDateFormat formatter = new SimpleDateFormat("mm/dd/yy",Locale.US);
        
     /**
      * @see HttpServlet#HttpServlet()
@@ -59,33 +64,59 @@ public class CreateAnalyticsTable extends HttpServlet {
 	 */
 	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
 		// TODO Auto-generated method stub
-		
-		
+		pw = response.getWriter();
 		response.setContentType("application/json");
+		
+		
+		tablename = request.getParameter("tablename");
+		columns   = new JSONArray(request.getParameter("columns"));
+		jReturn = new JSONObject();
 		try{
-			String tablename = request.getParameter("tablename");
-			JSONArray columns = new JSONArray(request.getParameter("columns"));
-			JSONArray jdata	= new JSONArray(request.getParameter("data"));
-			
-			
-			jReturn = new JSONObject();
-			pw = response.getWriter();
-			
-			
-			//System.out.println(columns);
-			//System.out.println(jdata);
-			
-			String query = "DROP TABLE IF EXISTS "+tablename;
+			//1.1 Create temporary sequence for tracked instance id
 			db = new DbConnect();
 			cnn = db.getConn();
-			cnn.setAutoCommit(false);
-			pstm = cnn.prepareStatement(query);
-			pstm.executeUpdate();
+			//cnn.setAutoCommit(false);
+			CreateTable(cnn);
 			
-			query = "CREATE TABLE IF NOT EXISTS " + tablename + "( \n";
-			
+			jReturn.put("success", true);
+			jReturn.put("message", "Analytics table created!");
+			pw.print(jReturn);
+		}catch(SQLException e){
+			//System.out.println( e.getNextException().toString() );
+			pw.print(e.getLocalizedMessage());
+			System.out.println( e.getLocalizedMessage() );
+			e.printStackTrace();
+		}catch(Exception e){
+			pw.print(e.getLocalizedMessage());
+			System.out.println( e.getLocalizedMessage() );
+			e.printStackTrace();
+		}finally{
+			if (pstm != null) {
+		        try {
+		        	pstm.close();
+		        } catch (SQLException e) {
+		            e.printStackTrace();
+		        }
+		    }
+		    if (cnn != null) {
+		        try {
+		            cnn.close();
+		        } catch (SQLException e) {
+		            e.printStackTrace();
+		        }
+		    }	
+		}
+	
+	}	
+
+	protected void CreateTable(Connection cnn) throws Exception{
+		query = "DROP TABLE IF EXISTS "+tablename;
+		pstm = cnn.prepareStatement(query);
+		pstm.executeUpdate();
+		
+		query = "CREATE TABLE IF NOT EXISTS " + tablename + "( \n";
+		try{
 			for (int i=0; i<columns.length();i++) {
-				
 				switch(columns.getString(i)){
 				case "psi":
 					query += columns.getString(i) + " character(11) NOT NULL,\n";
@@ -117,106 +148,19 @@ public class CreateAnalyticsTable extends HttpServlet {
 				}
 				
 			}
+			
 			query = query.substring(0,query.length() - 2); //remove the last comma
 			query+= ");";
-			//System.out.println(query);
 			
+			//Create analytics table
 			pstm = cnn.prepareStatement(query);
 			pstm.executeUpdate();
-			
+			//cnn.commit();
 			System.out.println("Analytics table structure created");
 			
-			//Reset query
-			query = "INSERT INTO "+tablename+" VALUES (";
-			for (int i=0; i<columns.length();i++) { 	
-				query +="?,";							
-			}
-			query = query.substring(0,query.length() - 1) + ");"; //remove the last comma
-			pstm = cnn.prepareStatement(query);
-			final int batchSize = 1000;
-			int count=0;
-			
-			for ( int i=1; i<jdata.length();i++){
-				for(int j=0;j<jdata.getJSONArray(i).length();j++){
-					if(jdata.getJSONArray(i).getString(j).isEmpty()){
-						switch(columns.getString(j)){
-						case "executiondate":
-							pstm.setDate(j+1, null);
-							break;
-						case "longitude":
-							pstm.setNull(j+1, java.sql.Types.DOUBLE);
-							break;
-						case "latitude":
-							pstm.setNull(j+1, java.sql.Types.DOUBLE);
-							break;
-						default:
-							pstm.setString(j+1, null);
-							break;
-						}
-					}else{
-						switch(columns.getString(j)){
-						case "executiondate":
-							dateString = jdata.getJSONArray(i).getString(j);
-							dateString = dateString.replace(" 0:00","");
-							dateParsed = formatter.parse(dateString);
-							dateSql = new java.sql.Date(dateParsed.getTime());
-							pstm.setDate(j+1, dateSql);
-							break;
-						case "longitude":
-							pstm.setDouble(j+1, Double.parseDouble(jdata.getJSONArray(i).getString(j)));
-							break;
-						case "latitude":
-							pstm.setDouble(j+1, Double.parseDouble(jdata.getJSONArray(i).getString(j)));
-							break;
-						default:
-							pstm.setString(j+1, jdata.getJSONArray(i).getString(j));
-							break;
-						}
-					}
-					
-				}
-				//System.out.println(pstm.toString());
-				pstm.addBatch();
-				if(++count % batchSize == 0) {
-					pstm.executeBatch();
-				}
-			}
-			//System.out.println(pstm.toString());
-			pstm.executeBatch();
-			cnn.commit();
-			//cnn.commit(); //Cannot commit when autoCommit is enabled
-			//Print output
-			jReturn.put("success", true);
-			jReturn.put("message", Integer.toString(jdata.length()) + "Records processed");
-			pw.print(jReturn);
-			
-		}catch(SQLException e){
-			e.printStackTrace();
-			jReturn.put("success", false);
-			jReturn.put("message", e.getNextException().toString());
-			pw.print(jReturn);
 		}catch(Exception e){
-			e.printStackTrace();
-			jReturn.put("success", false);
-			jReturn.put("message", e.toString());
-			pw.print(jReturn);
-		}finally{
-			if (pstm != null) {
-		        try {
-		        	pstm.close();
-		        } catch (SQLException e) {
-		            e.printStackTrace();
-		        }
-		    }
-		    if (cnn != null) {
-		        try {
-		            cnn.close();
-		        } catch (SQLException e) {
-		            e.printStackTrace();
-		        }
-		    }
+			//cnn.rollback();
+			throw e;
 		}
-		
 	}
-
 }

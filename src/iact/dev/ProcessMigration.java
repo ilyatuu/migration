@@ -323,7 +323,7 @@ public class ProcessMigration extends HttpServlet {
 			query += "trackedentityinstanceid,";
 			query += "unnest(array"+SpliceJSONArray(columns,"psi").toString().replace("\"", "'")+") as colname,";
 			query += "unnest(array"+SpliceJSONArray(columns,"psi").toString().replace("\"", "")+") as colvalu ";
-			query += "from _pe_register  t1 ";
+			query += "from "+tablename+"  t1 ";
 			query += "left join trackedentityinstance  t2 on t1.tei ilike t2.uid";
 			query += ") t3 left join trackedentityattribute t4 on t3.colname ilike t4.uid ";
 			query += "WHERE t3.colvalu is not null and t4.trackedentityattributeid is not null;";
