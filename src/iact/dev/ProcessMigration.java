@@ -107,6 +107,7 @@ public class ProcessMigration extends HttpServlet {
 			InsertProgramInstance(cnn, programid);
 			InsertProgramStageInstance(cnn,tablename,duser);
 			InsertTrackedEntityDataValue(cnn,tablename,columns);
+			dropAnalyticsTable(cnn,tablename);
 			System.out.println("Data migration completed");
 			jReturn.put("success", true);
 			jReturn.put("message", "Data migration completed");
@@ -498,8 +499,10 @@ public class ProcessMigration extends HttpServlet {
 		}
 	}
 	protected void dropAnalyticsTable(Connection cnn, String tablename) throws Exception{
+		//Finalizing migration by deleting the temporary table
 		try{
-			query = "DROP TABLE IF EXIST "+tablename;
+			System.out.println("remove created table " + tablename + "...");
+			query = "DROP TABLE IF EXIST "+tablename+";";
 			pstm = cnn.prepareStatement(query);
 			pstm.executeUpdate();
 			cnn.commit();

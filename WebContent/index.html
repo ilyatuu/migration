@@ -2,26 +2,31 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Migration - Existing Tracked Entity</title>
+<title>Migration V2</title>
 <link href="css/style.css" rel="stylesheet" type="text/css">
 </head>
 <body>
 <div id="page_container">
+	<label> * Make sure the csv file contains the column ou for organisation unit UiD</label>
+	<br /><br />
 	<input type="file" name="filename" id="filename">
-	<br />
+	<br /><br />
 	<label for="tblName">Table Name:</label>
 	<input type=text id="tblName" name="tblName" />
-	<br />
+	<br /><br />
 	<label for="duser">Default User</label>
 	<input type="text" id="duser" name="duser" value="smasomhe" />
-	<br />
+	<br /><br />
 	<label for="program">Program:</label>
 	<select id="program" name="program"></select>
-	<br />
+	<br /><br />
+	<input type="checkbox" id="dhis2source" name="dhis2source" />
+	<label>Check if the source is DHIS2 analytics, Leave blank (unchecked) if other datasources</label>
+	<br /><br />
 	<button id="btnAnalyze">Analyze</button>
-	<button id="btnProcess">Process</button>
-	<br />	
-	<textarea id="results" cols="100" rows="15"></textarea>
+	<button id="btnProcess">Process</button> <div id="loading"><img src="img/loading.gif" id="loadingImage"  style="display: none;" /></div>
+	<br /><br />	
+	<div id="results"></div>
 </div>
 	
 <!-- End of body -->
@@ -37,71 +42,35 @@ $(document).ready(function() {
 	var programMatch = false;
 	var inputErrors = true;
 	
-	// track for errors
-	var textarea = $('#results');
-	textarea.scrollTop = textarea.scrollHeight;
 	loadPrograms();
 	
-	//$("#btnProcess").attr("disabled", true);
-	//$("#btnProcess").prop("disabled", true);
-	
 	$("#btnAnalyze").click(function(){
-		hasErrors();
-	});
-		
-	
-	$("#btnProcess").click( function(){
-		$("#btnProcess").attr("disabled", true);
-		if(!hasErrors())
-			processMigration(columns,data);
-		else
-			$("#btnProcess").attr("disabled", false);	
-		
-	});
-	
-	
-	
-	$("#filename").change(function(evt) {
-		var ext = $("input#filename").val().split(".").pop().toLowerCase();
-		
-		if($.inArray(ext, ["csv"]) == -1) {
-			$("#results").text('Invalid file, please upload CSV');
-			return false;
+		if(!hasErrors()){
+			$("#results").append("<p>This file is migration ready, please proceed</p>");
 		}
-		
-		if(!(window.File && window.FileReader && window.FileList && window.Blob)) {
-			$("#results").text('The File APIs are not fully supported in this browser!');
-			return false;
-	    }
-		
-		
-        var file = evt.target.files[0];
-        var reader = new FileReader();
-        reader.readAsText(file);
-        reader.onload = function(event) {
-        	csvData = event.target.result;
-            data = $.csv.toArrays(csvData);
-            columns = data[0];
-            
-            if (data && data.length > 0) {
-            	//alert('Imported -' + data.length + '- rows successfully!');
-            	//$("#results").html( headers.length );
-            	var rows = parseInt(data.length);
-            	rows = rows -1;
-            	$("#results").append( "&#13;&#10;CSV File read with "+ rows +" rows");
-            	//$("#results").append( JSON.stringify(columns) + " &#13;&#10; " + data );
-            	
-            } else {
-                alert('No data to import!');
-            }
-            
-        };
-        reader.onerror = function() {
-        	$("#results").text('Unable to read ' + file.fileName);
-        };
-        inputErrors = false;	// Flag no in put errors
 	});
+	$("#btnProcess").click( function(){
+		if(!hasErrors()){
+			$("#loadingImage").show();
+			processMigration();
+		}
+	})
 	
+	function processMigration(){
+		if ( $("#dhis2source").is(":checked") ){
+			createAnalyticsTable();
+			insertToAnalyticsTableInBatches();
+			processNewRecord();
+		}else{
+			insertTEI();
+			insertPSI();
+			insertPI();
+			insertPS();
+			createAnalyticsTable();
+			insertToAnalyticsTableInBatches();
+			processNewRecord();
+		}
+	}
 	function hasErrors(){
 		$("#results").text("");	//reset feedback area;
 		
@@ -134,92 +103,174 @@ $(document).ready(function() {
 			return true;
 		}
 		
-		if( importantColumnsNotExists() ){
-			return true;
+		
+		if ( $("#dhis2source").is(":checked") ){		
+			if( importantDHIS2ColumnsNotExists() ){
+				return true;
+			}
+			verifyProgramID();
+			if(!programMatch){
+				$("#results").append("<p class='error'>Program selected does not match the datafile, please fix it!</p>");
+				return true;
+			}
+		}else{		
+			if( checkDHIS2ColumnsExist() ){
+				return true;
+			}
+			
+			if( importantNonDHIS2ColumnsNotExist() ){
+				return true;
+			}
 		}
-		if( duplicateProgramStage() ){
-			return true;
-		}
+		
 		if(inputErrors){
-			$("#results").append("&#13;&#10;Fix input errors");
+			$("#results").append("<p class='error'>Please fix input errors</p>");
 			return true;
 		}
 		chkUser();
 		if(!userExist){
-			$("#results").append("&#13;&#10;Username does not exist in the system, please change it");
 			return true;
 		}
-		verifyProgramID();
-		if(!programMatch){
-			$("#results").append("&#13;&#10;Program selected does not match the datafile, please fix it!");
-			return true;
-		}
+		
 		return false;
 	}
 	
-	function duplicateProgramStage(){
-		$("#results").append("&#13;&#10;Verifying consistances in program stages,...");
-		var idxOfps = $.inArray("ps",columns);
-		for(var i=1;i<data.length-1;i++){
-			if(data[i][idxOfps]!=data[i+1][idxOfps]){
-				$("#results").append("&#13;&#10;Error: More than one program stage identified. Please check your input file");
-				return true;
-			}
+	$("#filename").change(function(evt) {
+		var ext = $("input#filename").val().split(".").pop().toLowerCase();
+		
+		if($.inArray(ext, ["csv"]) == -1) {
+			$("#results").text("<p class='error'>Invalid file, please upload CSV</p>");
+			return false;
 		}
-		$("#results").append("&#13;&#10;Consistence verified.");
-		return false;
-	}
-	function importantColumnsNotExists(){
-		var impColumns = ["psi","pi","ps","executiondate","ou","tei"];
+		
+		if(!(window.File && window.FileReader && window.FileList && window.Blob)) {
+			$("#results").text('The File APIs are not fully supported in this browser!');
+			return false;
+	    }
+		
+		
+        var file = evt.target.files[0];
+        var reader = new FileReader();
+        reader.readAsText(file);
+        reader.onload = function(event) {
+        	csvData = event.target.result;
+            data = $.csv.toArrays(csvData);
+            columns = data[0];
+            
+            if (data && data.length > 0) {
+            	//alert('Imported -' + data.length + '- rows successfully!');
+            	//$("#results").html( headers.length );
+            	var rows = parseInt(data.length);
+            	rows = rows -1;
+            	$("#results").append( "<p>CSV File read with "+ rows +" rows </p>");
+            	//$("#results").append( JSON.stringify(column1) + " <br /> ");
+            	
+            	//$("#results").append( "and " + data[2][8] );
+            	
+            } else {
+                alert('No data to import!');
+            }
+            
+        };
+        reader.onerror = function() {
+        	$("#results").text('Unable to read ' + file.fileName);
+        };
+        inputErrors = false;	// Flag no in put errors
+	});
+	
+	function importantNonDHIS2ColumnsNotExist(){
+		var impColumns = ["ou","executiondate"];
+		var NotExist = false;
 		$.each(impColumns, function(index,value){
 			if( $.inArray(value,columns) == -1 ){
-				$("#results").append("&#13;&#10;Column " + value + "does not exist. Invalid input file" );
-				return true;
+				$("#results").append("<p class='error'>Column " + value + " is required. Please ensure that it exists</p>" );
+				NotExist = true;
+				return false;
 			}
 		});
-		return false;
+		return NotExist;
 	}
-	function createAnalyticsTable(columns,data){
-		$("#results").append("&#13;&#10;Creating analytics table...");
-		$.ajax({
-			  type: "POST",
-			  url: "CreateAnalyticsTable",
-			  data: {
-				  tablename: $("#tblName").val(),
-				  columns:JSON.stringify(columns),
-				  data: JSON.stringify(data)
-			  },
-			  dataType: "json",
-			  success: function(data){
-				$("#results").append("&#13;&#10;" + data.message );
-			  },
-			  error: function(data){
-				  $("#results").append("&#13;&#10;" + data.message );  
-			  }
-			  
+	
+	function checkDHIS2ColumnsExist(){
+		var impColumns = ["psi","pi","ps","tei"];
+		var TheyExist = false;
+		$.each(impColumns, function(index,value){
+			if( $.inArray(value,columns) > -1 ){
+				$("#results").append("<p class='error'>Column " + value + " is autogenerated for Non DHIS2 datasources. Are you sure this is a non DHIS2 datasource</p>" );
+				TheyExist = true;
+				return false;
+			}
 		});
+		return TheyExist;
 	}
-	function processMigration(columns,data){
-		$("#results").append("&#13;&#10;Process migration started");
+	function importantDHIS2ColumnsNotExists(){
+		var impColumns = ["psi","pi","ps","executiondate","ou","tei"];
+		var DoNoExist = false;
+		$.each(impColumns, function(index,value){
+			if( $.inArray(value,columns) == -1 ){
+				$("#results").append("<p class='error'>Column " + value + " does not exist. This column must exist for data sources originated from DHIS2</p>" );
+				DoNoExist = true;
+				return false;
+			}
+		});
+		return DoNoExist;
+	}
+	function createAnalyticsTable(){
+		$("#results").append("<p>Creating analytics table</p>");
 		$.ajax({
 			type: "POST",
-		  	url: "ProcessMigration",
+			url: "CreateAnalyticsTable",
+			data: {
+				  tablename: $("#tblName").val(),
+				  columns:JSON.stringify(columns)
+			},
+			datatype: "json",
+			async: false,
+			success: function(data){
+				if(data.success){
+					$("#results").append("<br />" + data.message);
+				}
+			},
+			error: function(xhr, status, error){
+			  	$("#results").append("<br /> Error! <br />" + xhr.responseText + error );    
+		  	}
+		})
+	}
+	function insertToAnalyticsTable(in_data){
+		$.ajax({
+			type: "POST",
+		  	url: "InsertToAnalyticsTable",
 		  	data: {
 				  tablename: $("#tblName").val(),
+				  rows: JSON.stringify(in_data),
 				  columns:JSON.stringify(columns),
-				  data: JSON.stringify(data),
 				  program: $("#program").val(),
 				  duser: $("duser").val()
 			},
 		  	dataType: "json",
-		  	async: true,
+		  	async: false,
 		  	success: function(data){
-				$("#results").append("&#13;&#10;Data migrated" + data.message);
+				$("#results").append("<p>Analytics table populated with " + data.message + "</p>");
 		  	},
 		  	error: function(xhr, status, error){
-			  	$("#results").append("&#13;&#10;Migration Error, Duplicate Key or data already exist &#13;&#10;" + xhr.responseText + error );    
+			  	$("#results").append("<p class='error'>Migration Error, Duplicate Key or data already exist <br />" + xhr.responseText + error + "</p>");    
 		  	}
 		})
+	}
+	function insertToAnalyticsTableInBatches(){
+		$("#results").append("<p>Insert into analytics table in batches </p>");
+		var row = 1;
+		var batch = [];
+		var batchsize = 1000;
+		while (row<data.length){
+			batch.push( data[row] );
+			if( row++ % batchsize == 0){
+				insertToAnalyticsTable( batch );
+				batch = [];
+			}
+		}
+		if(batch.length > 0)
+			insertToAnalyticsTable( batch );
 	}
 	function loadPrograms(){
 		$.ajax({
@@ -238,9 +289,55 @@ $(document).ready(function() {
 				$("#program").append(html);
 			},
 			error: function(xhr, status, error){
-				$("#results").append("&#13;&#10;Load programs with an ajax call returned an error" + xhr.responseText); 
+				$("#results").append("<p>Load programs with an ajax call returned an error" + xhr.responseText + "</p>"); 
 			}
 		})
+	}
+	function processNewRecord(){
+		$.ajax({
+			type: "POST",
+		  	url: "ProcessNewRec",
+		  	data: {
+				  tablename: $("#tblName").val(),
+				  columns: JSON.stringify(columns),
+				  program: $("#program").val(),
+				  duser: $("duser").val()
+			},
+		  	dataType: "json",
+		  	async: true,
+		  	success: function(data){
+				$("#results").append("<br />Data migrated" + data.message);
+				$("#loadingImage").hide();
+		  	},
+		  	error: function(xhr, status, error){
+			  	$("#results").append("<p class='error'>Migration Error, Duplicate Key or data already exist <br />" + xhr.responseText + error + "</p>");
+			  	$("#loadingImage").hide();
+		  	}
+		})
+	}
+	
+	function postTrackedEntityInstance(){
+		var tei = {};
+		var itm = {};
+		var att = [];
+		
+		// attributes as defined by EIMC 
+		var attr = ["XgYnDsaCEk4","ulJFYYN5FIK","ioEQ7Eumb2Y","Hnv0pPYuXVx","cYxGMLtawEq","Qu551QID2aN","sfioftgmC45","u2UNic88zD4","LFrM6uvEmmB","lt5a7cgkZQ3","ysfNQ5SPZC4","b1tudMvkB4S"];
+		
+		// insert tracked entity of the type person
+		tei["trackedEntity"] = "EUIG2cdV3cn"; 
+		
+		for(i=3; i<4;i++){
+			tei["orgUnit"] = data[i][ $.inArray("ward",columns) ];
+			$.each(attr, function(idx,val){
+				itm = {};
+				itm["attribute"] = val;  itm["value"] = data[i][$.inArray(val,columns)];
+				att.push(itm);
+			})
+			
+			tei["attributes"] = att;
+		}
+		alert( JSON.stringify(tei) );
 	}
 	function verifyProgramID(){
 	    var idxOfps = $.inArray("ps",columns);
@@ -255,28 +352,114 @@ $(document).ready(function() {
 	    	datatype: "json",
 	    	async: false,
 	    	beforeSend: function(){
-	    		$("#results").append("&#13;&#10;Verifying program stage from the data file exist with the selected program,...");
+	    		$("#results").append("<p>Verifying program stage from the data file exist with the selected program,...</p>");
 	    	},
 	    	success: function(data){
 	    		if(data.success){
 	    			if( data.progid != $("#program").val()  ){
-		    			$("#results").append("Error: Your datafile does not match the program you have selected");
+		    			$("#results").append("<p class='error'>Error: Your datafile does not match the program you have selected</p>");
 		    			programMatch = false;
 		    		}else{
 		    			$("#results").append("Program stage verified");
 		    			programMatch = true;
 		    		}
 	    		}else{
-	    			$("#results").append("&#13;&#10;"+data.message);
+	    			$("#results").append("<br />"+data.message);
 	    			programMatch = false;
 	    		}
 	    		
 	    	},
 	    	error: function(xhr, status, error){
-	    		$("#results").append("&#13;&#10;Error on verifyProgram function, "+xhr.responseText);
+	    		$("#results").append("<p class='error'>Error on verifyProgram function, "+xhr.responseText+"</p>");
 	    		programMatch = false;
 	    	}
 	    });
+	}
+	function insertTEI(){
+		$("#results").append("<br />Creating new tracked entity instance uids");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("tei"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+		
+		//alert(data[1][ $.inArray("tei",columns) ]);
+	}
+	function insertPS(){
+		$("#results").append("<br />Creating new program stage with references from program selected on the dropdown");
+		
+		// Get program stages
+		// For program EIMC (1631913), there are 4 program stages
+		// 1. EIMC First Visit	uid CBsjq5Kgw0K
+		// 2. 7 Days Visit		uid NXQGtd7s90C
+		// 3. 48 Hours Visit	uid ZH54T1PGMDX
+		// 4. Referral Done		uid PQOXK0ISrfa
+
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("ps"); //insert column title
+			}else{
+				if( v[ jQuery.inArray("referral_done",columns) ] == "Yes")
+					v.push("PQOXK0ISrfa");
+				else {
+					if ( v[ jQuery.inArray("visit_within_48_hours", columns) ] == "Yes" )
+						v.push("ZH54T1PGMDX");
+					else {
+						if ( v[ jQuery.inArray("visit_within_7_days", columns)] == "Yes" )
+							v.push("NXQGtd7s90C");
+						else
+							v.push("CBsjq5Kgw0K");
+					}
+						
+				}
+					
+			}
+		})
+	}
+	function insertPSI(){
+		$("#results").append("<br />Creating new program stage instance uids");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("psi"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+	}
+	function insertPI(){
+		$("#results").append("<br />Createing new program instance uids");
+		$.each(data,function(i,v){
+			if(i==0){
+				v.push("pi"); //insert column title
+			}else{
+				v.push(stringGen(11));
+			}
+		})
+	}
+	function stringGen(len){
+		var text = "";
+		var charset = "abcdefghABCDEFGHIijklmnopqrstuvwxyzJKLMNOPQR12345STUVWXYZ6789";
+		for( var i=0; i < len; i++ )
+	        text += charset.charAt(Math.floor(Math.random() * charset.length));
+		 return text;
+	}
+	function downloadCSV(){
+		var csvContent = "data:text/csv;charset=utf-8,";
+		
+		$.each(data, function(i, v){
+			dataString = v.join(",");
+			csvContent += i < data.length ? dataString+ "\n" : dataString;
+		})
+		var encodedUri = encodeURI(csvContent);
+		//var link = document.createElement("a");
+		var link = document.getElementById('ldownload');
+		link.setAttribute("href", encodedUri);
+		link.setAttribute("download", "my_data.csv");
+		//document.body.appendChild(link); // Required for FF
+		
+		//link.click(); // This will download the data file named "my_data.csv"
 	}
 	function chkUser(){
 		
@@ -288,7 +471,7 @@ $(document).ready(function() {
 					usr:$("#duser").val() },
 			datatype:"json",
 			beforeSend: function(){
-				$("#results").append("&#13;&#10;Verifying username exist,...");		
+				$("#results").append("<p>Verifying username exist,...</p>");		
 			},
 			success: function(data){
 				if(data.success){

@@ -2,15 +2,11 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Migration - New Tracked Entity</title>
+<title>Migration - Existing Tracked Entity</title>
 <link href="css/style.css" rel="stylesheet" type="text/css">
 </head>
 <body>
 <div id="page_container">
-	<label> * Make sure the csv file contains the column ou for organisation unit UiD</label>
-	<br />
-	<label> * Make sure psi is the column that separates data attributes, data values to org unit details. (psi, ou, tei ...)</label>
-	<br /><br />
 	<input type="file" name="filename" id="filename">
 	<br />
 	<label for="tblName">Table Name:</label>
@@ -24,8 +20,7 @@
 	<br />
 	<button id="btnAnalyze">Analyze</button>
 	<button id="btnProcess">Process</button>
-	<a id="ldownload" href="#">Download</a>
-	<br /><br />	
+	<br />	
 	<textarea id="results" cols="100" rows="15"></textarea>
 </div>
 	
@@ -42,17 +37,29 @@ $(document).ready(function() {
 	var programMatch = false;
 	var inputErrors = true;
 	
+	// track for errors
+	var textarea = $('#results');
+	textarea.scrollTop = textarea.scrollHeight;
 	loadPrograms();
 	
+	//$("#btnProcess").attr("disabled", true);
+	//$("#btnProcess").prop("disabled", true);
+	
+	$("#btnAnalyze").click(function(){
+		hasErrors();
+	});
+		
 	
 	$("#btnProcess").click( function(){
-		insertTEI();
-		insertPSI();
-		insertPI();
-		//downloadCSV();
-		createAnalyticsTable();
-		processNewRecord(data);
-	})
+		$("#btnProcess").attr("disabled", true);
+		if(!hasErrors())
+			processMigration(columns,data);
+		else
+			$("#btnProcess").attr("disabled", false);	
+		
+	});
+	
+	
 	
 	$("#filename").change(function(evt) {
 		var ext = $("input#filename").val().split(".").pop().toLowerCase();
@@ -82,9 +89,7 @@ $(document).ready(function() {
             	var rows = parseInt(data.length);
             	rows = rows -1;
             	$("#results").append( "&#13;&#10;CSV File read with "+ rows +" rows");
-            	//$("#results").append( JSON.stringify(column1) + " &#13;&#10; ");
-            	
-            	//$("#results").append( "and " + data[2][8] );
+            	//$("#results").append( JSON.stringify(columns) + " &#13;&#10; " + data );
             	
             } else {
                 alert('No data to import!');
@@ -97,7 +102,73 @@ $(document).ready(function() {
         inputErrors = false;	// Flag no in put errors
 	});
 	
+	function hasErrors(){
+		$("#results").text("");	//reset feedback area;
+		
+		if( $("#filename").val().length < 1){
+			$("#results").text("No input file specified " );
+			return true;
+		};
+		
+		if( $("#tblName").val().length < 1 ){
+			$("#results").text("Table name not specified " );
+			return true;
+		}
+		
+		if( $("#duser").val().length < 1 ){
+			$("#results").text("Database user cannot be black " );
+			return true;
+		}
+		var str = $('#tblName').val();
+		if(/^[a-zA-Z0-9-_ ]*$/.test(str) == false) {
+			$("#results").text("Invalid table name. Table name cannot have special characters " );
+			return true;
+		}
+		
+		if( $("#tblName").val().indexOf(' ') >= 0 ){
+			$("#results").text("Invalid table name. Table name cannot have spaces " );
+			return true;
+		}
+		if( $("#program").val() < 1 ){
+			$("#results").text("No program selected. Please select one!" );
+			return true;
+		}
+		
+		if( importantColumnsNotExists() ){
+			return true;
+		}
+		if( duplicateProgramStage() ){
+			return true;
+		}
+		if(inputErrors){
+			$("#results").append("&#13;&#10;Fix input errors");
+			return true;
+		}
+		chkUser();
+		if(!userExist){
+			$("#results").append("&#13;&#10;Username does not exist in the system, please change it");
+			return true;
+		}
+		verifyProgramID();
+		if(!programMatch){
+			$("#results").append("&#13;&#10;Program selected does not match the datafile, please fix it!");
+			return true;
+		}
+		return false;
+	}
 	
+	function duplicateProgramStage(){
+		$("#results").append("&#13;&#10;Verifying consistances in program stages,...");
+		var idxOfps = $.inArray("ps",columns);
+		for(var i=1;i<data.length-1;i++){
+			if(data[i][idxOfps]!=data[i+1][idxOfps]){
+				$("#results").append("&#13;&#10;Error: More than one program stage identified. Please check your input file");
+				return true;
+			}
+		}
+		$("#results").append("&#13;&#10;Consistence verified.");
+		return false;
+	}
 	function importantColumnsNotExists(){
 		var impColumns = ["psi","pi","ps","executiondate","ou","tei"];
 		$.each(impColumns, function(index,value){
@@ -108,23 +179,45 @@ $(document).ready(function() {
 		});
 		return false;
 	}
-	function createAnalyticsTable(){
+	function createAnalyticsTable(columns,data){
+		$("#results").append("&#13;&#10;Creating analytics table...");
+		$.ajax({
+			  type: "POST",
+			  url: "CreateAnalyticsTable",
+			  data: {
+				  tablename: $("#tblName").val(),
+				  columns:JSON.stringify(columns),
+				  data: JSON.stringify(data)
+			  },
+			  dataType: "json",
+			  success: function(data){
+				$("#results").append("&#13;&#10;" + data.message );
+			  },
+			  error: function(data){
+				  $("#results").append("&#13;&#10;" + data.message );  
+			  }
+			  
+		});
+	}
+	function processMigration(columns,data){
+		$("#results").append("&#13;&#10;Process migration started");
 		$.ajax({
 			type: "POST",
-			url: "CreateAnalyticsTable",
-			data: {
+		  	url: "ProcessMigration",
+		  	data: {
 				  tablename: $("#tblName").val(),
-				  columns:JSON.stringify(columns)
+				  columns:JSON.stringify(columns),
+				  data: JSON.stringify(data),
+				  program: $("#program").val(),
+				  duser: $("duser").val()
 			},
-			datatype: "json",
-			async: true,
-			success: function(data){
-				if(data.success){
-					$("#results").append("&#13;&#10;" + data.message);
-				}
-			},
-			error: function(xhr, status, error){
-			  	$("#results").append("&#13;&#10; Error! &#13;&#10;" + xhr.responseText + error );    
+		  	dataType: "json",
+		  	async: true,
+		  	success: function(data){
+				$("#results").append("&#13;&#10;Data migrated" + data.message);
+		  	},
+		  	error: function(xhr, status, error){
+			  	$("#results").append("&#13;&#10;Migration Error, Duplicate Key or data already exist &#13;&#10;" + xhr.responseText + error );    
 		  	}
 		})
 	}
@@ -148,65 +241,6 @@ $(document).ready(function() {
 				$("#results").append("&#13;&#10;Load programs with an ajax call returned an error" + xhr.responseText); 
 			}
 		})
-	}
-	function processNewRecord(in_data){
-		$.ajax({
-			type: "POST",
-		  	url: "ProcessNewRec",
-		  	data: {
-				  tablename: $("#tblName").val(),
-				  rows: JSON.stringify(in_data),
-				  program: $("#program").val(),
-				  duser: $("duser").val()
-			},
-		  	dataType: "json",
-		  	async: true,
-		  	success: function(data){
-				$("#results").append("&#13;&#10;Data migrated" + data.message);
-		  	},
-		  	error: function(xhr, status, error){
-			  	$("#results").append("&#13;&#10;Migration Error, Duplicate Key or data already exist &#13;&#10;" + xhr.responseText + error );    
-		  	}
-		})
-	}
-	function processNewRecInBatches(){
-		$("#results").append("&#13;&#10; Process in batches");
-		var row = 3;
-		var batch = [];
-		var batchsize = 1000;
-		while (row<data.length){
-			batch.push( data[row] );
-			if( row++ % batchsize == 0){
-				processNewRecord( batch );
-				batch = [];
-			}
-		}
-		if(batch.length > 0)
-			processNewRecord( batch );
-	}
-	
-	function postTrackedEntityInstance(){
-		var tei = {};
-		var itm = {};
-		var att = [];
-		
-		// attributes as defined by EIMC 
-		var attr = ["XgYnDsaCEk4","ulJFYYN5FIK","ioEQ7Eumb2Y","Hnv0pPYuXVx","cYxGMLtawEq","Qu551QID2aN","sfioftgmC45","u2UNic88zD4","LFrM6uvEmmB","lt5a7cgkZQ3","ysfNQ5SPZC4","b1tudMvkB4S"];
-		
-		// insert tracked entity of the type person
-		tei["trackedEntity"] = "EUIG2cdV3cn"; 
-		
-		for(i=3; i<4;i++){
-			tei["orgUnit"] = data[i][ $.inArray("ward",columns) ];
-			$.each(attr, function(idx,val){
-				itm = {};
-				itm["attribute"] = val;  itm["value"] = data[i][$.inArray(val,columns)];
-				att.push(itm);
-			})
-			
-			tei["attributes"] = att;
-		}
-		alert( JSON.stringify(tei) );
 	}
 	function verifyProgramID(){
 	    var idxOfps = $.inArray("ps",columns);
@@ -243,61 +277,6 @@ $(document).ready(function() {
 	    		programMatch = false;
 	    	}
 	    });
-	}
-	function insertTEI(){
-		$("#results").append("&#13;&#10;Create new tracked entity instance uid");
-		$.each(data,function(i,v){
-			if(i==0){
-				v.push("tei"); //insert column title
-			}else{
-				v.push(stringGen(11));
-			}
-		})
-		
-		//alert(data[1][ $.inArray("tei",columns) ]);
-	}
-	function insertPSI(){
-		$("#results").append("&#13;&#10;Create new program stage instance uid");
-		$.each(data,function(i,v){
-			if(i==0){
-				v.push("psi"); //insert column title
-			}else{
-				v.push(stringGen(11));
-			}
-		})
-	}
-	function insertPI(){
-		$("#results").append("&#13;&#10;Create new program instance uid");
-		$.each(data,function(i,v){
-			if(i==0){
-				v.push("pi"); //insert column title
-			}else{
-				v.push(stringGen(11));
-			}
-		})
-	}
-	function stringGen(len){
-		var text = "";
-		var charset = "abcdefghABCDEFGHIijklmnopqrstuvwxyzJKLMNOPQR12345STUVWXYZ6789";
-		for( var i=0; i < len; i++ )
-	        text += charset.charAt(Math.floor(Math.random() * charset.length));
-		 return text;
-	}
-	function downloadCSV(){
-		var csvContent = "data:text/csv;charset=utf-8,";
-		
-		$.each(data, function(i, v){
-			dataString = v.join(",");
-			csvContent += i < data.length ? dataString+ "\n" : dataString;
-		})
-		var encodedUri = encodeURI(csvContent);
-		//var link = document.createElement("a");
-		var link = document.getElementById('ldownload');
-		link.setAttribute("href", encodedUri);
-		link.setAttribute("download", "my_data.csv");
-		//document.body.appendChild(link); // Required for FF
-		
-		//link.click(); // This will download the data file named "my_data.csv"
 	}
 	function chkUser(){
 		

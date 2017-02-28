@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -40,7 +41,6 @@ public class ProcessNewRec extends HttpServlet {
 	int programid;
 	JSONObject jReturn;
 	JSONArray columns;
-	JSONArray jdata;
 	PrintWriter pw;
 	SimpleDateFormat formatter = new SimpleDateFormat("mm/dd/yy",Locale.US);
        
@@ -71,18 +71,20 @@ public class ProcessNewRec extends HttpServlet {
 		duser = request.getParameter("duser");
 		tablename = request.getParameter("tablename");
 		programid = Integer.parseInt( request.getParameter("program") );
-		jdata	= new JSONArray(request.getParameter("rows"));
-		columns = jdata.getJSONArray(0);
+		columns	= new JSONArray(request.getParameter("columns"));
 		
 		jReturn = new JSONObject();
 		try{
 			db = new DbConnect();
 			cnn = db.getConn();
 			cnn.setAutoCommit(false);
-			InsertIntoAnalyticsTable(cnn);
-			InsertNewTrackedEntityInstance(cnn);
+			InsertTrackedEntityInstance(cnn);
 			InserttrackedEntityAttributes(cnn);
-			
+			InsertProgramInstance(cnn);
+			InsertProgramStageInstance(cnn);
+			InsertTrackedEntityDataValue(cnn);
+			DropAnalyticsTable(cnn);
+			System.out.println("Migration process completed");
 			jReturn.put("success", true);
 			jReturn.put("message", "Data migration completed");
 			pw.print(jReturn);
@@ -113,102 +115,30 @@ public class ProcessNewRec extends HttpServlet {
 		}
 	}
 	
-	protected void InsertIntoAnalyticsTable(Connection cnn) throws Exception {
+	
+	protected void InsertTrackedEntityInstance(Connection cnn) throws Exception{
 		try{
-			if (cnn==null){
-				db= new DbConnect();
-				cnn = db.getConn();
-				
-				
-			}
-			//Reset query
-			query = "INSERT INTO "+tablename+" VALUES (";
-			for (int i=0; i<columns.length();i++) { 	
-				query +="?,";							
-			}
-			query = query.substring(0,query.length() - 1) + ");"; //remove the last comma
-			pstm = cnn.prepareStatement(query);
-			final int batchSize = 1000;
-			int count=0;
-			for ( int i=1; i<jdata.length();i++){
-				for(int j=0;j<jdata.getJSONArray(i).length();j++){
-					if(jdata.getJSONArray(i).getString(j).isEmpty()){
-						switch(columns.getString(j)){
-						case "executiondate":
-							pstm.setDate(j+1, null);
-							break;
-						case "longitude":
-							pstm.setNull(j+1, java.sql.Types.DOUBLE);
-							break;
-						case "latitude":
-							pstm.setNull(j+1, java.sql.Types.DOUBLE);
-							break;
-						default:
-							pstm.setString(j+1, null);
-							break;
-						}
-					}else{
-						switch(columns.getString(j)){
-						case "executiondate":
-							dateString = jdata.getJSONArray(i).getString(j);
-							dateString = dateString.replace(" 0:00","");
-							dateParsed = formatter.parse(dateString);
-							dateSql = new java.sql.Date(dateParsed.getTime());
-							pstm.setDate(j+1, dateSql);
-							break;
-						case "longitude":
-							pstm.setDouble(j+1, Double.parseDouble(jdata.getJSONArray(i).getString(j)));
-							break;
-						case "latitude":
-							pstm.setDouble(j+1, Double.parseDouble(jdata.getJSONArray(i).getString(j)));
-							break;
-						default:
-							pstm.setString(j+1, jdata.getJSONArray(i).getString(j));
-							break;
-						}
-					}
-					
-				}
-				//System.out.println(pstm.toString());
-				pstm.addBatch();
-				if(++count % batchSize == 0) {
-					pstm.executeBatch();
-				}
-			}
-			pstm.executeBatch();
-			cnn.commit();
-			//Print output
-			jReturn.put("success", true);
-			jReturn.put("message", Integer.toString(jdata.length()) + " records temporary stored");
-			//pw.print(jReturn);
-		}catch(Exception e){
-			//cnn.rollback();
-			throw e;
-		}
-	}
-	protected void InsertNewTrackedEntityInstance(Connection cnn) throws Exception{
-		try{
-			query = "CREATE TEMP SEQUENCE IF NOT EXISTS temp_trackedinstanceid_seq INCREMENT BY 1START 1;";
+			query = "CREATE TEMP SEQUENCE IF NOT EXISTS temp_trackedentityinstanceid_seq INCREMENT BY 1 START 1;";
 			pstm = cnn.prepareStatement(query);
 			pstm.execute();
 			
 			//1.2. Create temporary table for programinstanceid
 			query  = "CREATE TEMP TABLE temp_trackedentityinstance(";
-			query += "trackedentityinstanceid integer NOT NULL DEFAULT nextval('temp_trackedinstanceid_seq'),";
+			query += "trackedentityinstanceid integer NOT NULL DEFAULT nextval('temp_trackedentityinstanceid_seq'),";
 			query += "uid character varying(11),";
 			query += "organisationunitid integer NOT NULL,";
 			query += "trackedentityid integer,";
 			query += "CONSTRAINT trackedentityinstance_pkey PRIMARY KEY (trackedentityinstanceid)";
 			query += ");";
+			
 			pstm = cnn.prepareStatement(query);
 			pstm.execute();
 			
 			//Set table sequency to last value of the table record in the original table
-			query  = "SELECT setval('temp_trackedinstanceid_seq',";
+			query  = "SELECT setval('temp_trackedentityinstanceid_seq',";
 			query += "COALESCE((SELECT MAX(trackedentityinstanceid)+1 FROM trackedentityinstance), 1), false);";
 			pstm = cnn.prepareStatement(query);
 			pstm.execute();
-			
 			
 			//379594 is trackedentity of the type Person. This is under the table trackedentity
 			query   = "INSERT INTO temp_trackedentityinstance";
@@ -222,10 +152,6 @@ public class ProcessNewRec extends HttpServlet {
 			pstm = cnn.prepareStatement(query);
 			pstm.execute();
 			
-			pstm = cnn.prepareStatement(query);
-			pstm.execute();
-			
-			
 			query  = "INSERT INTO trackedentityinstance(";
 			query += "trackedentityinstanceid, uid, code, created, lastupdated,";
 			query += "representativeid,organisationunitid, trackedentityid) ";
@@ -237,6 +163,7 @@ public class ProcessNewRec extends HttpServlet {
 			pstm  = cnn.prepareStatement(query);
 			pstm.execute();
 			cnn.commit();
+			
 			System.out.println("trackedentityinstance insert completed");
 		}catch(Exception e){
 			//cnn.rollback();
@@ -245,22 +172,46 @@ public class ProcessNewRec extends HttpServlet {
 	}
 	protected void InserttrackedEntityAttributes(Connection cnn) throws Exception{
 		try{
-			query  = "insert into trackedentityattributevalue ";
-			query += "select distinct on (t3.trackedentityinstanceid, t4.trackedentityattributeid) ";
-			query += "t3.trackedentityinstanceid, t4.trackedentityattributeid, t3.colvalu as value ";
+				
+			//query  = "insert into trackedentityattributevalue ";
+			query  = "select distinct on (t3.trackedentityinstanceid, t4.trackedentityattributeid) ";
+			query += "t3.trackedentityinstanceid, t4.trackedentityattributeid, t3.colvalu as attributevalue ";
 			query += "from (";
 			query += "select ";
 			query += "tei,";
 			query += "trackedentityinstanceid,";
-			query += "unnest(array"+SpliceJSONArray(columns,"psi").toString().replace("\"", "'")+") as colname,";
-			query += "unnest(array"+SpliceJSONArray(columns,"psi").toString().replace("\"", "")+") as colvalu ";
+			query += "unnest(array"+RemoveUnwanted(columns).toString().replace("\"", "'")+") as colname,";
+			query += "unnest(array"+RemoveUnwanted(columns).toString().replace("\"", "")+") as colvalu ";
 			query += "from "+tablename+"  t1 ";
 			query += "left join trackedentityinstance  t2 on t1.tei ilike t2.uid";
 			query += ") t3 left join trackedentityattribute t4 on t3.colname ilike t4.uid ";
 			query += "WHERE t3.colvalu is not null and t4.trackedentityattributeid is not null;";
 			
 			pstm  = cnn.prepareStatement(query);
-			pstm.execute();
+			ResultSet rs = pstm.executeQuery();
+			
+			query  = "insert into trackedentityattributevalue values (?,?,?);";
+			pstm = cnn.prepareStatement(query);
+			final int batchSize = 1000;
+			int count=0;
+			
+			while(rs.next()){
+				
+				pstm.setInt(1, rs.getInt("trackedentityinstanceid"));
+				pstm.setInt(2, rs.getInt("trackedentityattributeid"));
+				
+				if(rs.getString("attributevalue").length() == 20 || rs.getString("attributevalue").contains(":")){
+					pstm.setString(3, SQLDate(rs.getString("attributevalue")));
+				}else{
+					pstm.setString(3, rs.getString("attributevalue"));
+				}
+				
+				pstm.addBatch();
+				if(++count % batchSize == 0) {
+					pstm.executeBatch();
+				}
+			}
+			pstm.executeBatch();
 			cnn.commit();
 			System.out.println("trackedEntityattributes insert completed");
 		}catch(Exception e){
@@ -319,6 +270,117 @@ public class ProcessNewRec extends HttpServlet {
 			throw e;
 		}
 	}
+	protected void InsertProgramStageInstance(Connection cnn) throws Exception{
+		try{
+			query = "CREATE TEMP SEQUENCE IF NOT EXISTS temp_programstageinstance_seq INCREMENT BY 1 START 1;";
+			pstm  = cnn.prepareStatement(query);
+			pstm.execute();
+			
+			query  = "CREATE TEMP TABLE temp_programstageinstance (";
+			query += "programstageinstanceid integer NOT NULL DEFAULT nextval('temp_programstageinstance_seq'),";
+			query += "programinstanceid integer NOT NULL,";
+			query += "programstageid integer NOT NULL,";
+			query += "duedate timestamp without time zone,";
+			query += "executiondate timestamp without time zone,";
+			query += "organisationunitid integer,";
+			query += "status character varying(25),";
+			query += "completeduser character varying(255),";
+			query += "completeddate timestamp without time zone,";
+			query += "uid character varying(11),";
+			query += "CONSTRAINT programstageinstance_pkey PRIMARY KEY (programstageinstanceid)";
+			query += ");";
+			pstm   = cnn.prepareStatement(query);
+			pstm.execute();
+			
+			query = "SELECT setval('temp_programstageinstance_seq', COALESCE((SELECT MAX(programstageinstanceid)+1 FROM programstageinstance), 1), false);";
+			pstm   = cnn.prepareStatement(query);
+			pstm.execute();
+			
+			query  = "insert into temp_programstageinstance ";
+			query += "(programinstanceid,programstageid,duedate,executiondate,organisationunitid,status,completeduser,completeddate,uid)";
+			query += "select distinct on (t1.psi) ";
+			query += "t2.programinstanceid, t3.programstageid,t1.executiondate as duedate,t1.executiondate,t4.organisationunitid,";
+			query += "'COMPLETED' as status,'"+duser+"' as completeduser,now()::timestamp(3) as completeddate,t1.psi ";
+			query += "from "+tablename+" t1 ";
+			query += "left join programinstance t2 on t1.pi = t2.uid ";
+			query += "left join programstage t3 on t1.ps = t3.uid    ";
+			query += "left join organisationunit t4 on t1.ou = t4.uid; ";
+			pstm   = cnn.prepareStatement(query);
+			pstm.execute();
+			
+			query  = "insert into programstageinstance(programstageinstanceid,programinstanceid,programstageid,duedate,";
+			query += "executiondate,organisationunitid,status,completeddate,uid,created,lastupdated)";
+			query += "select programstageinstanceid,";
+			query += "programinstanceid,programstageid,duedate,executiondate,organisationunitid,status,completeddate,uid,";
+			query += "now()::timestamp(3) as created,now()::timestamp(3) as updated ";
+			query += "from temp_programstageinstance;";
+			pstm   = cnn.prepareStatement(query);
+			pstm.execute();
+			cnn.commit();
+			System.out.println("Program stage instance insert completed");
+		}catch(Exception e){
+			cnn.rollback();
+			throw e;
+		}
+	}
+	protected void InsertTrackedEntityDataValue(Connection cnn) throws Exception{
+		try{
+			query  = "select distinct on (t1.programstageinstanceid, t2.dataelementid) ";
+			query += "t1.programstageinstanceid,t2.dataelementid,t1.dataelementvalue,";
+			query += "FALSE as providedelsewhere, ";
+			query += "now()::timestamp(3) as created,now()::timestamp(3) as lastupdated ";
+			query += "from (";
+			query += "select psi,programstageinstanceid,";
+			query += "unnest(array"+RemoveUnwanted(columns).toString().replace("\"", "'")+") as dataelement,";
+			query += "unnest(array"+RemoveUnwanted(columns).toString().replace("\"", "")+") as dataelementvalue ";
+			query += "from "+tablename+" t1 ";
+			query += "left join programstageinstance t2 on t1.psi = t2.uid";
+			query += ") t1 ";
+			query += "left join dataelement t2 on t1.dataelement ilike t2.uid ";
+			query += "where t1.dataelementvalue is not null and t2.dataelementid is not null ";
+			
+			 
+			
+			pstm  = cnn.prepareStatement(query);
+			ResultSet rs = pstm.executeQuery();
+			
+			//Stored the data into result set
+			//then loop inside to clean/convert java dates into sql dates
+			
+			query = "insert into trackedentitydatavalue values (?,?,?,?,?,?);";
+			pstm = cnn.prepareStatement(query);
+			
+			final int batchSize = 1000;
+			int count=0;
+			
+			while(rs.next()){
+				pstm.setInt(1, rs.getInt("programstageinstanceid"));
+				pstm.setInt(2, rs.getInt("dataelementid"));
+				
+				//Detect date values
+				if(rs.getString("dataelementvalue").length() == 7 || rs.getString("dataelementvalue").length() == 6){
+					pstm.setString(3, SQLDate(rs.getString("dataelementvalue")));
+				}else{
+					pstm.setString(3, rs.getString("dataelementvalue"));
+				}
+				
+				pstm.setBoolean(4, rs.getBoolean("providedelsewhere"));
+				pstm.setDate(5, rs.getDate("created"));
+				pstm.setDate(6, rs.getDate("lastupdated"));
+				
+				pstm.addBatch();
+				if(++count % batchSize == 0) {
+					pstm.executeBatch();
+				}
+			}
+			pstm.executeBatch();
+			cnn.commit();
+			System.out.println("Trackedentitydatavalue insert completed");
+		}catch(Exception e){
+			cnn.rollback();
+			throw e;
+		}
+	}
 	protected String getUiD(int iLength) {
         String SALTCHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890";
         StringBuilder salt = new StringBuilder();
@@ -331,12 +393,61 @@ public class ProcessNewRec extends HttpServlet {
         return saltStr;
 
     }
+	protected void DropAnalyticsTable(Connection cnn) throws Exception{
+		//Finalizing migration by deleting the temporary table
+		try{
+			System.out.print("remove created table " + tablename + "...");
+			query = "DROP TABLE IF EXISTS "+tablename+";";
+			pstm = cnn.prepareStatement(query);
+			System.out.println(pstm.toString());
+			pstm.execute();
+			cnn.commit();
+		}catch(Exception e){
+			cnn.rollback();
+			throw e;
+		}
+	}
+	protected String SQLDate(String sdate) throws Exception{
+		Date dateParsed;
+		java.sql.Date dateSql;
+		
+		try{
+			dateParsed = formatter.parse(sdate);
+			dateSql = new java.sql.Date(dateParsed.getTime());
+		}catch(Exception e1){
+			try{
+				formatter = new SimpleDateFormat("dd/mm/yy",Locale.ENGLISH);
+				dateParsed = formatter.parse(sdate);
+				dateSql = new java.sql.Date(dateParsed.getTime());
+			}catch(Exception e2){
+				try{
+					formatter = new SimpleDateFormat("yyyy-mm-dd",Locale.ENGLISH);
+					dateParsed = formatter.parse(sdate);
+					dateSql = new java.sql.Date(dateParsed.getTime());
+				}catch(Exception e3){
+					return sdate;
+				}
+			}
+		}
+		//Take only the first 10 characters 12:12:12 00
+		return dateSql.toString().substring(0, 10);
+	}
 	protected JSONArray SpliceJSONArray(JSONArray jarr, String SpliceAt){
 		JSONArray j = new JSONArray();
 		for(int i=0;i<jarr.length();i++){
 			if(jarr.getString(i).equalsIgnoreCase(SpliceAt))
 				break;
 			j.put(jarr.getString(i));
+		}
+		return j;
+	}
+	protected JSONArray RemoveUnwanted(JSONArray jarr){
+		//all the UUID are 11 size by length
+		JSONArray j = new JSONArray();
+		for(int i=0;i<jarr.length();i++){
+			if(jarr.getString(i).length() == 11){
+				j.put(jarr.getString(i));
+			}
 		}
 		return j;
 	}

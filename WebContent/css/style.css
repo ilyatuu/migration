@@ -12,13 +12,28 @@ body {
 	color: #333;
 	background-color: #fff;
 }
-textarea {
+#results {
     padding: 5px;
-    resize: none;
-    readonly: true;
-    background-color:#FFF !important;
+    border: 1px solid black;
+    width: 700px;
+    height: 250px;
+    overflow-y: auto;
+    
+}
+#results p{
+	line-height: 1.5;
+}
+
+#results p.error{
+	color: red;
 }
 #page_container {
 	margin-top: 10px;
 	margin-left: 10px;
+}
+#loading{
+	width:15px;
+	height:15px;
+	float:right;
+	margin-right:1010px;
 }
