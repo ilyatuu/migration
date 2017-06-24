@@ -20,18 +20,25 @@
 	<label for="program">Program:</label>
 	<select id="program" name="program"></select>
 	<br /><br />
-	<input type="checkbox" id="dhis2source" name="dhis2source" />
-	<label>Check if the source is DHIS2 analytics, Leave blank (unchecked) if other datasources</label>
+	<label for="dhis2source">Data Source</label>
+	<select id="dhis2source" name="dhis2source">
+		<option value="0"> - - </option>
+		<option value="1"> DHIS2 Data Source </option>
+		<option value="2"> Non DHIS2 Data Source </option>
+	</select>
 	<br /><br />
 	<button id="btnAnalyze">Analyze</button>
-	<button id="btnProcess">Process</button> <div id="loading"><img src="img/loading.gif" id="loadingImage"  style="display: none;" /></div>
+	<button id="btnProcess">Process</button>
+	<div id="loading">
+		<img src="img/facebook.gif" id="loadingImage"  style="display: none; width:25px; margin-left:10px;" />
+	</div>
 	<br /><br />	
 	<div id="results"></div>
 </div>
 	
 <!-- End of body -->
 <!-- Script Files-->
-<script src="js/jquery.min.js"></script>
+<script src="js/jquery-3.2.1.min.js"></script>
 <script src="js/jquery.csv.min.js"></script>
 <script>
 $(document).ready(function() {
@@ -57,16 +64,19 @@ $(document).ready(function() {
 	})
 	
 	function processMigration(){
-		if ( $("#dhis2source").is(":checked") ){
-			createAnalyticsTable();
+		if ( $("#dhis2source").val() == 1 ){ //DHIS2 Datasource
+			
+			if(!createAnalyticsTable())
+				return;
 			insertToAnalyticsTableInBatches();
 			processNewRecord();
-		}else{
+		}else{								//Non DHIS2 Datasource
 			insertTEI();
 			insertPSI();
 			insertPI();
 			insertPS();
-			createAnalyticsTable();
+			if(!createAnalyticsTable())
+				return;
 			insertToAnalyticsTableInBatches();
 			processNewRecord();
 		}
@@ -75,36 +85,45 @@ $(document).ready(function() {
 		$("#results").text("");	//reset feedback area;
 		
 		if( $("#filename").val().length < 1){
-			$("#results").text("No input file specified " );
+			$("#results").html("<p class='error'>No input file specified</p>" );
 			return true;
 		};
 		
+		if( $("#dhis2source").val() == 0){
+			$("#results").html("<p class='error'>Please select source type</p>" );
+			return true;
+		}
+		
+		
 		if( $("#tblName").val().length < 1 ){
-			$("#results").text("Table name not specified " );
+			$("#results").html("<p class='error'>Table name not specified </p>" );
 			return true;
 		}
 		
 		if( $("#duser").val().length < 1 ){
-			$("#results").text("Database user cannot be black " );
+			$("#results").html("<p class='error'>Database user cannot be black</p>" );
 			return true;
 		}
 		var str = $('#tblName').val();
 		if(/^[a-zA-Z0-9-_ ]*$/.test(str) == false) {
-			$("#results").text("Invalid table name. Table name cannot have special characters " );
+			$("#results").html("<p class='error'>Invalid table name. Table name cannot have special characters</p>" );
 			return true;
 		}
 		
 		if( $("#tblName").val().indexOf(' ') >= 0 ){
-			$("#results").text("Invalid table name. Table name cannot have spaces " );
+			$("#results").html("<p class='error'>Invalid table name. Table name cannot have spaces</p>" );
 			return true;
 		}
 		if( $("#program").val() < 1 ){
-			$("#results").text("No program selected. Please select one!" );
+			$("#results").html("<p class='error'>No program selected. Please select one!</p>" );
 			return true;
 		}
 		
+		if( invalidColumnName() ){
+			return true;
+		}
 		
-		if ( $("#dhis2source").is(":checked") ){		
+		if ( $("#dhis2source").val() == 1 ){		
 			if( importantDHIS2ColumnsNotExists() ){
 				return true;
 			}
@@ -136,6 +155,10 @@ $(document).ready(function() {
 	}
 	
 	$("#filename").change(function(evt) {
+		
+		//Show Loading
+		$("#loadingImage").show();
+		
 		var ext = $("input#filename").val().split(".").pop().toLowerCase();
 		
 		if($.inArray(ext, ["csv"]) == -1) {
@@ -170,12 +193,13 @@ $(document).ready(function() {
             } else {
                 alert('No data to import!');
             }
-            
+            $("#loadingImage").hide();    
         };
         reader.onerror = function() {
         	$("#results").text('Unable to read ' + file.fileName);
         };
         inputErrors = false;	// Flag no in put errors
+        
 	});
 	
 	function importantNonDHIS2ColumnsNotExist(){
@@ -215,8 +239,22 @@ $(document).ready(function() {
 		});
 		return DoNoExist;
 	}
+	function invalidColumnName(){
+		var invalidColumns = ["user","select","#N/A","N/A"];
+		var invalidColumn = false;
+		$.each(invalidColumns, function(index,value){
+			if( $.inArray(value,columns) > -1 ){
+				$("#results").append("<p class='error'>Invalid column name " + value + ". Please change this to a different column name</p>" );
+				invalidColumn = true;
+				//return false;
+			}
+		});
+		return invalidColumn;
+		
+	}
 	function createAnalyticsTable(){
-		$("#results").append("<p>Creating analytics table</p>");
+		var tableCreated = false;
+		$("#results").append("<br />Create analytics table...");
 		$.ajax({
 			type: "POST",
 			url: "CreateAnalyticsTable",
@@ -228,48 +266,63 @@ $(document).ready(function() {
 			async: false,
 			success: function(data){
 				if(data.success){
-					$("#results").append("<br />" + data.message);
+					$("#results").append("<br />" + data.message+";");
+					tableCreated = true;
 				}
 			},
 			error: function(xhr, status, error){
-			  	$("#results").append("<br /> Error! <br />" + xhr.responseText + error );    
+			  	$("#results").append("<p class='error'> Error on createAnalyticsTable() function <br />" + xhr.responseText + error + "</p>" );
+			  	tableCreated = false;
 		  	}
 		})
+		return tableCreated;
 	}
 	function insertToAnalyticsTable(in_data){
+		
 		$.ajax({
 			type: "POST",
 		  	url: "InsertToAnalyticsTable",
-		  	data: {
-				  tablename: $("#tblName").val(),
-				  rows: JSON.stringify(in_data),
-				  columns:JSON.stringify(columns),
-				  program: $("#program").val(),
-				  duser: $("duser").val()
-			},
+		  	//processData: false,
+		  	data:{
+		  		tablename: $("#tblName").val(),
+				program: $("#program").val(),
+				duser: $("#duser").val(),
+				columns:JSON.stringify(columns),
+				rows: JSON.stringify(in_data)
+		  	},
+		  	//contentType: "application/json",
 		  	dataType: "json",
 		  	async: false,
 		  	success: function(data){
-				$("#results").append("<p>Analytics table populated with " + data.message + "</p>");
+				//$("#results").append("<p>Analytics table populated with " + data.message + "</p>");
 		  	},
 		  	error: function(xhr, status, error){
-			  	$("#results").append("<p class='error'>Migration Error, Duplicate Key or data already exist <br />" + xhr.responseText + error + "</p>");    
+			  	$("#results").append("<p class='error'>Error on insertToAnalyticsTable() function <br />" + xhr.responseText + error + "</p>");    
 		  	}
 		})
 	}
 	function insertToAnalyticsTableInBatches(){
-		$("#results").append("<p>Insert into analytics table in batches </p>");
+		$("#results").append("<br />Insert into analytics table in batches");
 		var row = 1;
 		var batch = [];
 		var batchsize = 1000;
+		
+		if(columns.length > 110){
+			batchsize = 200;	
+		}else{
+			batchsize = 1000;
+		};
+		$("#results").append("<br />Processing records ");
 		while (row<data.length){
 			batch.push( data[row] );
 			if( row++ % batchsize == 0){
+				$("#results").append(", "+row);
 				insertToAnalyticsTable( batch );
 				batch = [];
 			}
 		}
 		if(batch.length > 0)
+			$("#results").append(", "+row+"</p>");
 			insertToAnalyticsTable( batch );
 	}
 	function loadPrograms(){
@@ -306,12 +359,15 @@ $(document).ready(function() {
 		  	dataType: "json",
 		  	async: true,
 		  	success: function(data){
-				$("#results").append("<br />Data migrated" + data.message);
+				$("#results").append("<br />End " + data.message);
 				$("#loadingImage").hide();
 		  	},
 		  	error: function(xhr, status, error){
-			  	$("#results").append("<p class='error'>Migration Error, Duplicate Key or data already exist <br />" + xhr.responseText + error + "</p>");
-			  	$("#loadingImage").hide();
+			  	//$("#results").append("<p class='error'>Something went wrong at ProcessNewRecord() " + xhr.responseText + error + "</p>");
+			  	//$("#loadingImage").hide();
+		  	},
+		  	complete: function(xhr, status, error){
+				$("#loadingImage").hide();
 		  	}
 		})
 	}
@@ -352,7 +408,7 @@ $(document).ready(function() {
 	    	datatype: "json",
 	    	async: false,
 	    	beforeSend: function(){
-	    		$("#results").append("<p>Verifying program stage from the data file exist with the selected program,...</p>");
+	    		$("#results").append("<br />Verifying program stage from the data file exist with the selected program,...");
 	    	},
 	    	success: function(data){
 	    		if(data.success){
@@ -471,7 +527,7 @@ $(document).ready(function() {
 					usr:$("#duser").val() },
 			datatype:"json",
 			beforeSend: function(){
-				$("#results").append("<p>Verifying username exist,...</p>");		
+				$("#results").append("<br /><br />Verifying username exist,...");		
 			},
 			success: function(data){
 				if(data.success){
@@ -483,7 +539,7 @@ $(document).ready(function() {
 				}
 			},
 			error: function(xhr, status, error){
-				$("#results").append("Error check user function"+xhr.responseText );
+				$("#results").append("<br />Error check user function"+xhr.responseText );
 				userExist = false;
 			}
 		});
